@@ -1,6 +1,8 @@
 <resources>
     <string name="app_name">Wireless Indoor Localization</string>
-    <string name="title_home">Home</string>
-    <string name="title_dashboard">Dashboard</string>
+    <string name="title_home">搜索AP</string>
+    <string name="title_dashboard">定位</string>
     <string name="title_notifications">Notifications</string>
+    <string name="action_refresh">刷新</string>
+    <string name="action_upload">上传选中位置数据</string>
 </resources>

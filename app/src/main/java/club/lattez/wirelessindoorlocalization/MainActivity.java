@@ -8,7 +8,9 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
+import android.os.Looper;
 import android.support.annotation.NonNull;
+import android.support.design.widget.BottomNavigationView;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
@@ -18,11 +20,24 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.widget.Toast;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.Set;
 
 import club.lattez.wirelessindoorlocalization.Adapter.WifiInfoAdapter;
 import club.lattez.wirelessindoorlocalization.Model.WifiInfo;
+import club.lattez.wirelessindoorlocalization.UI.LocationActivity;
+import club.lattez.wirelessindoorlocalization.Util.HttpUtil;
 import club.lattez.wirelessindoorlocalization.Util.WifiUtil;
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.Response;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -31,6 +46,7 @@ public class MainActivity extends AppCompatActivity {
     private RecyclerView recyclerView;
     private WifiInfoAdapter wifiInfoAdapter;
     private List<WifiInfo> wifiInfoList;
+    private Set<String> filterFingerPrinter = new HashSet<>(Arrays.asList("", ""));
 
     private static final int WIL_ACCESS_FINE_LOCATION = 100;
 
@@ -44,6 +60,10 @@ public class MainActivity extends AppCompatActivity {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
                     WIL_ACCESS_FINE_LOCATION);
         }
+
+        // 初始化底栏
+        BottomNavigationView navigation = findViewById(R.id.navigation);
+        navigation.setOnNavigationItemSelectedListener(mOnNavigationItemSelectedListener);
 
         // 初始化一个 WiFi manager
         wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
@@ -64,8 +84,53 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        menu.add(0, 0, 0, "重新扫描");
+        getMenuInflater().inflate(R.menu.menu_main, menu);
         return super.onCreateOptionsMenu(menu);
+    }
+
+    private BottomNavigationView.OnNavigationItemSelectedListener mOnNavigationItemSelectedListener
+            = new BottomNavigationView.OnNavigationItemSelectedListener() {
+
+        @Override
+        public boolean onNavigationItemSelected(@NonNull MenuItem item) {
+            switch (item.getItemId()) {
+                case R.id.navigation_home:
+                    return true;
+                case R.id.navigation_dashboard:
+                    Intent intent = new Intent(MainActivity.this, LocationActivity.class);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                    startActivity(intent);
+                    return true;
+            }
+            return false;
+        }
+    };
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+            case R.id.action_refresh:
+                wifiManager.startScan();
+                Toast.makeText(this, "重新扫描中...", Toast.LENGTH_SHORT).show();
+                break;
+            case R.id.action_upload: {
+                List<WifiInfo> wifiInfoList = WifiUtil.getWifiScanResult(wifiManager);
+                int x = new Random().nextInt(10) + 1;
+                int y = new Random().nextInt(10) + 1;
+                Map<String, Integer> wifiRssi = new HashMap<>();
+                for (WifiInfo wifiInfo : wifiInfoList) {
+                    if (filter(wifiInfo, wifiRssi))
+                        wifiRssi.put(wifiInfo.getBssid(), Math.abs(wifiInfo.getRssi()));
+                }
+                uploadCurPosition(x, y, wifiRssi);
+                break;
+            }
+        }
+        return super.onOptionsItemSelected(item);
+    }
+
+    private boolean filter(WifiInfo wifiInfo, Map<String, Integer> wifiRssi) {
+        return filterFingerPrinter.contains(wifiInfo.getBssid());
     }
 
     @Override
@@ -86,16 +151,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        switch (item.getItemId()) {
-            case 0:
-                wifiManager.startScan();
-                break;
-        }
-        return super.onOptionsItemSelected(item);
-    }
-
-    @Override
     protected void onPause() {
         unregisterReceiver(wifiReceiver);
         super.onPause();
@@ -109,8 +164,34 @@ public class MainActivity extends AppCompatActivity {
 
     private List<WifiInfo> initWifiInfo(WifiManager wifiManager) {
         WifiUtil.startWifiScan(wifiManager);
-        Toast.makeText(this, "开始扫描AP", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "开始扫描AP...", Toast.LENGTH_SHORT).show();
         return WifiUtil.getWifiScanResult(wifiManager);
+    }
+
+    private void uploadCurPosition(int x, int y, Map<String, Integer> wifiRssi) {
+        Map<String, Object> uploadMap = new HashMap<>();
+        uploadMap.put("x", x);
+        uploadMap.put("y", y);
+        uploadMap.put("wifiRssi", wifiRssi);
+        List<Map<String, Object>> uploadList = new ArrayList<>();
+        uploadList.add(uploadMap);
+        String address = "http://192.168.2.19:8181/point/save";
+        HttpUtil.putJson(address, uploadList, new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                e.printStackTrace();
+                Looper.prepare();
+                Toast.makeText(MainActivity.this, "上传失败", Toast.LENGTH_SHORT).show();
+                Looper.loop();
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                Looper.prepare();
+                Toast.makeText(MainActivity.this, "上传成功 " + response.body().string(), Toast.LENGTH_SHORT).show();
+                Looper.loop();
+            }
+        });
     }
 
     class WifiReceiver extends BroadcastReceiver {
@@ -121,6 +202,7 @@ public class MainActivity extends AppCompatActivity {
             wifiInfoList.clear();
             wifiInfoList.addAll(WifiUtil.getWifiScanResult(wifiManager));
             wifiInfoAdapter.notifyDataSetChanged();
+            Toast.makeText(context, "重新扫描中...", Toast.LENGTH_SHORT).show();
         }
     }
 }
